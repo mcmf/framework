@@ -2,7 +2,7 @@
 // +----------------------------------------------------------------------
 // | ThinkPHP [ WE CAN DO IT JUST THINK IT ]
 // +----------------------------------------------------------------------
-// | Copyright (c) 2006-2015 http://thinkphp.cn All rights reserved.
+// | Copyright (c) 2006-2016 http://thinkphp.cn All rights reserved.
 // +----------------------------------------------------------------------
 // | Licensed ( http://www.apache.org/licenses/LICENSE-2.0 )
 // +----------------------------------------------------------------------
@@ -12,18 +12,24 @@
 namespace think\exception;
 
 use Exception;
+use think\App;
 use think\Config;
-use think\Console;
 use think\console\Output;
+use think\Lang;
 use think\Log;
 use think\Response;
 
 class Handle
 {
-
+    protected $render;
     protected $ignoreReport = [
         '\\think\\exception\\HttpException',
     ];
+
+    public function setRender($render)
+    {
+        $this->render = $render;
+    }
 
     /**
      * Report or log an exception.
@@ -35,20 +41,24 @@ class Handle
     {
         if (!$this->isIgnoreReport($exception)) {
             // 收集异常数据
-            if (APP_DEBUG) {
+            if (App::$debug) {
                 $data = [
                     'file'    => $exception->getFile(),
                     'line'    => $exception->getLine(),
-                    'message' => $exception->getMessage(),
+                    'message' => $this->getMessage($exception),
                     'code'    => $this->getCode($exception),
                 ];
                 $log = "[{$data['code']}]{$data['message']}[{$data['file']}:{$data['line']}]";
             } else {
                 $data = [
-                    'code'    => $exception->getCode(),
-                    'message' => $exception->getMessage(),
+                    'code'    => $this->getCode($exception),
+                    'message' => $this->getMessage($exception),
                 ];
                 $log = "[{$data['code']}]{$data['message']}";
+            }
+
+            if (Config::get('record_trace')) {
+                $log .= "\r\n" . $exception->getTraceAsString();
             }
 
             Log::record($log, 'error');
@@ -73,6 +83,13 @@ class Handle
      */
     public function render(Exception $e)
     {
+        if ($this->render && $this->render instanceof \Closure) {
+            $result = call_user_func_array($this->render, [$e]);
+            if ($result) {
+                return $result;
+            }
+        }
+
         if ($e instanceof HttpException) {
             return $this->renderHttpException($e);
         } else {
@@ -86,7 +103,10 @@ class Handle
      */
     public function renderForConsole(Output $output, Exception $e)
     {
-        (new Console)->renderException($e, $output);
+        if (App::$debug) {
+            $output->setVerbosity(Output::VERBOSITY_DEBUG);
+        }
+        $output->renderException($e);
     }
 
     /**
@@ -97,8 +117,8 @@ class Handle
     {
         $status   = $e->getStatusCode();
         $template = Config::get('http_exception_template');
-        if (!APP_DEBUG && !empty($template[$status])) {
-            return Response::create($template[$status], 'view')->vars(['e' => $e])->send();
+        if (!App::$debug && !empty($template[$status])) {
+            return Response::create($template[$status], 'view', $status)->assign(['e' => $e]);
         } else {
             return $this->convertExceptionToResponse($e);
         }
@@ -111,13 +131,13 @@ class Handle
     protected function convertExceptionToResponse(Exception $exception)
     {
         // 收集异常数据
-        if (APP_DEBUG) {
+        if (App::$debug) {
             // 调试模式，获取详细的错误信息
             $data = [
                 'name'    => get_class($exception),
                 'file'    => $exception->getFile(),
                 'line'    => $exception->getLine(),
-                'message' => $exception->getMessage(),
+                'message' => $this->getMessage($exception),
                 'trace'   => $exception->getTrace(),
                 'code'    => $this->getCode($exception),
                 'source'  => $this->getSourceCode($exception),
@@ -136,22 +156,24 @@ class Handle
         } else {
             // 部署模式仅显示 Code 和 Message
             $data = [
-                'code'    => $exception->getCode(),
-                'message' => $exception->getMessage(),
+                'code'    => $this->getCode($exception),
+                'message' => $this->getMessage($exception),
             ];
-        }
 
-        if (!APP_DEBUG && !Config::get('show_error_msg')) {
-            // 不显示详细错误信息
-            $data['message'] = Config::get('error_message');
+            if (!Config::get('show_error_msg')) {
+                // 不显示详细错误信息
+                $data['message'] = Config::get('error_message');
+            }
         }
 
         //保留一层
         while (ob_get_level() > 1) {
             ob_end_clean();
         }
+
+        $data['echo'] = ob_get_clean();
+
         ob_start();
-        ob_implicit_flush(0);
         extract($data);
         include Config::get('exception_tmpl');
         // 获取并清空缓存
@@ -160,7 +182,7 @@ class Handle
 
         if ($exception instanceof HttpException) {
             $statusCode = $exception->getStatusCode();
-            //TODO 设置headers 等待response完善
+            $response->header($exception->getHeaders());
         }
 
         if (!isset($statusCode)) {
@@ -183,6 +205,31 @@ class Handle
             $code = $exception->getSeverity();
         }
         return $code;
+    }
+
+    /**
+     * 获取错误信息
+     * ErrorException则使用错误级别作为错误编码
+     * @param  \Exception $exception
+     * @return string                错误信息
+     */
+    protected function getMessage(Exception $exception)
+    {
+        $message = $exception->getMessage();
+        if (IS_CLI) {
+            return $message;
+        }
+
+        if (strpos($message, ':')) {
+            $name    = strstr($message, ':', true);
+            $message = Lang::has($name) ? Lang::get($name) . strstr($message, ':') : $message;
+        } elseif (strpos($message, ',')) {
+            $name    = strstr($message, ',', true);
+            $message = Lang::has($name) ? Lang::get($name) . ':' . substr(strstr($message, ','), 1) : $message;
+        } elseif (Lang::has($message)) {
+            $message = Lang::get($message);
+        }
+        return $message;
     }
 
     /**

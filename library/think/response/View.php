@@ -2,7 +2,7 @@
 // +----------------------------------------------------------------------
 // | ThinkPHP [ WE CAN DO IT JUST THINK ]
 // +----------------------------------------------------------------------
-// | Copyright (c) 2006~2016 http://thinkphp.cn All rights reserved.
+// | Copyright (c) 2006~2018 http://thinkphp.cn All rights reserved.
 // +----------------------------------------------------------------------
 // | Licensed ( http://www.apache.org/licenses/LICENSE-2.0 )
 // +----------------------------------------------------------------------
@@ -37,15 +37,18 @@ class View extends Response
     }
 
     /**
-     * 视图变量赋值
-     * @access protected
-     * @param array $vars 模板变量
-     * @return $this
+     * 获取视图变量
+     * @access public
+     * @param string $name 模板变量
+     * @return mixed
      */
-    public function vars($vars = [])
+    public function getVars($name = null)
     {
-        $this->vars = $vars;
-        return $this;
+        if (is_null($name)) {
+            return $this->vars;
+        } else {
+            return isset($this->vars[$name]) ? $this->vars[$name] : null;
+        }
     }
 
     /**
